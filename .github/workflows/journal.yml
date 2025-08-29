@@ -1,0 +1,137 @@
+name: EPUB → Journaling PDF (keep links)
+
+on:
+  workflow_dispatch:
+    inputs:
+      epub_url:
+        description: "Direct URL to the EPUB file (long-press EPUB on Archive.org → Copy Link)"
+        required: true
+      right_margin_in:
+        description: "Right journal margin (inches)"
+        default: "3.0"
+        required: true
+      orientation:
+        description: "portrait or landscape"
+        default: "landscape"
+        required: true
+      paper_size:
+        description: "letter or a4"
+        default: "letter"
+        required: true
+      base_font_pt:
+        description: "Base font size hint for Calibre (points)"
+        default: "11"
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (not strictly needed)
+        uses: actions/checkout@v4
+
+      - name: Install Calibre (ebook-convert)
+        run: |
+          sudo -v
+          curl -L https://download.calibre-ebook.com/linux-installer.py | sudo -E python3 -
+
+      - name: Set up Python (for PyMuPDF overlay)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Python deps
+        run: pip install --quiet pymupdf
+
+      - name: Download EPUB
+        run: |
+          mkdir -p work
+          curl -L "${{ inputs.epub_url }}" -o work/book.epub
+          ls -l work/book.epub
+          file work/book.epub || true
+          # quick sanity check that it’s truly an EPUB (a ZIP container)
+          python - << 'PY'
+import sys, zipfile
+try:
+    zipfile.ZipFile("work/book.epub").testzip()
+    print("EPUB looks like a valid ZIP.")
+except Exception as e:
+    print("ERROR: The provided URL did not return a valid EPUB/ZIP.\n", e)
+    sys.exit(1)
+PY
+
+      - name: Compute margin + paper settings
+        id: cfg
+        shell: bash
+        run: |
+          RMPT=$(python3 - << 'PY'
+import os
+print(int(float(os.environ["RIGHT_IN"])*72))
+PY
+          )
+          echo "margin_pt=$RMPT" >> $GITHUB_OUTPUT
+          # Calibre uses paper names like 'letter' or 'a4'
+          PS="${{ inputs.paper_size }}"
+          echo "paper=$PS" >> $GITHUB_OUTPUT
+        env:
+          RIGHT_IN: ${{ inputs.right_margin_in }}
+
+      - name: Convert EPUB → base PDF with Calibre (keep anchors)
+        run: |
+          ebook-convert work/book.epub work/base.pdf \
+            --paper-size "${{ steps.cfg.outputs.paper }}" \
+            --margin-left 54 --margin-top 54 --margin-bottom 54 --margin-right ${{ steps.cfg.outputs.margin_pt }} \
+            --pdf-use-document-metadata \
+            --embed-all-fonts \
+            --pdf-add-toc \
+            --base-font-size ${{ inputs.base_font_pt }}
+          ls -lh work/base.pdf
+
+      - name: Rotate (if needed) + paint journal divider + add 'Home' hotspot
+        env:
+          ORIENT: ${{ inputs.orientation }}
+          RIGHT_IN: ${{ inputs.right_margin_in }}
+        run: |
+          python - << 'PY'
+import fitz, os, math
+in_pdf="work/base.pdf"
+out_pdf="work/journaling.pdf"
+right_in=float(os.getenv("RIGHT_IN","3.0"))
+orient=os.getenv("ORIENT","landscape").lower()
+
+doc=fitz.open(in_pdf)
+margin_pt=int(right_in*72)
+
+# Rotate to landscape if requested and page is portrait
+if orient=="landscape":
+    for p in doc:
+        r=p.rect
+        if r.height > r.width:
+            p.set_rotation(90)  # non-destructive, links preserved
+
+# Draw divider line + small 'Home' text + hotspot (link to page 1)
+for i,p in enumerate(doc):
+    r=p.rect
+    x=r.x1 - margin_pt
+    # divider
+    p.draw_line(fitz.Point(x, r.y0+12), fitz.Point(x, r.y1-12), color=(0,0,0), width=0.5)
+    # 'Home' label (tiny, neutral gray); put near top-left
+    p.insert_text(fitz.Point(r.x0+18, r.y0+22), "Home", fontsize=8, color=(0.3,0.3,0.3))
+    # invisible hotspot back to page 1 (index 0)
+    p.insert_link({
+        "kind": fitz.LINK_GOTO,
+        "from": fitz.Rect(r.x0+12, r.y0+10, r.x0+75, r.y0+28),
+        "page": 0
+    })
+
+doc.save(out_pdf)
+print("Wrote", out_pdf)
+PY
+          ls -lh work/journaling.pdf
+
+      - name: Upload finished PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: journaling-pdf
+          path: work/journaling.pdf
+          if-no-files-found: error

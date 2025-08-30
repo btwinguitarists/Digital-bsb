@@ -1,0 +1,89 @@
+name: PDF → Journaling PDF (keep links)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pdf_path:
+        description: "Path to your input PDF in the repo (e.g., input/source.pdf)"
+        required: true
+        default: "input/source.pdf"
+      right_margin_in:
+        description: "Right journal margin (inches)"
+        required: true
+        default: "3"
+      orientation:
+        description: "portrait or landscape (landscape rotates pages, margin becomes right side visually)"
+        required: true
+        default: "portrait"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify input PDF exists
+        run: |
+          test -f "${{ inputs.pdf_path }}" || { echo "ERROR: Missing PDF at ${{ inputs.pdf_path }}"; exit 1; }
+          ls -lh "${{ inputs.pdf_path }}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install --quiet pymupdf
+
+      - name: Add journaling gutter + corner hotspots (links preserved)
+        env:
+          IN_PDF: ${{ inputs.pdf_path }}
+          RIGHT_MARGIN_IN: ${{ inputs.right_margin_in }}
+          ORIENTATION: ${{ inputs.orientation }}
+        run: |
+          mkdir -p output
+          python - <<'PY'
+          import os, fitz
+          in_pdf   = os.environ.get("IN_PDF", "input/source.pdf")
+          out_pdf  = "output/journaling.pdf"
+          right_in = float(os.environ.get("RIGHT_MARGIN_IN", "3"))
+          orient   = os.environ.get("ORIENTATION", "portrait").lower()
+          margin   = int(right_in * 72)
+          rotate   = (orient == "landscape")
+
+          doc = fitz.open(in_pdf)
+
+          for p in doc:
+              # rotate portrait pages if landscape requested (preserves links)
+              if rotate and p.rect.height > p.rect.width:
+                  p.set_rotation(90)
+
+              r = p.rect  # refresh after any rotation
+              x = r.x1 - margin
+
+              # vertical divider line
+              p.draw_line(fitz.Point(x, r.y0+12), fitz.Point(x, r.y1-12), width=0.6)
+
+              # "Home" top-left -> page 1 (index 0)
+              p.insert_text(fitz.Point(r.x0+18, r.y0+18), "Home", fontsize=8, color=(0,0,0))
+              p.insert_link({"kind": fitz.LINK_GOTO,
+                             "from": fitz.Rect(r.x0+12, r.y0+10, r.x0+70, r.y0+26),
+                             "page": 0})
+
+              # "Chapters" top-right -> page 1 as well (change target if your TOC is elsewhere)
+              p.insert_text(fitz.Point(r.x1-80, r.y0+18), "Chapters", fontsize=8, color=(0,0,0))
+              p.insert_link({"kind": fitz.LINK_GOTO,
+                             "from": fitz.Rect(r.x1-84, r.y0+10, r.x1-12, r.y0+26),
+                             "page": 0})
+
+          doc.save(out_pdf)
+          print("Saved", out_pdf)
+          PY
+
+      - name: Upload finished PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: journaling-pdf
+          path: output/journaling.pdf
+          if-no-files-found: error

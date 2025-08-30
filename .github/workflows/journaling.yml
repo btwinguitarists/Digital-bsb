@@ -1,0 +1,108 @@
+name: EPUB/PDF → Journaling PDF (keep all links)
+
+on:
+  workflow_dispatch:
+    inputs:
+      input_type:
+        description: "Pick epub_url or pdf_url"
+        required: true
+        default: epub_url
+        type: choice
+        options:
+          - epub_url
+          - pdf_url
+      url:
+        description: "Direct URL to an EPUB or a PDF"
+        required: true
+      right_margin_in:
+        description: "Right journal margin (inches)"
+        required: true
+        default: "3.0"
+      orientation:
+        description: "portrait or landscape (landscape = rotate pages so margin becomes right)"
+        required: true
+        default: "landscape"
+      paper_size:
+        description: "letter or a4 (EPUB only)"
+        required: true
+        default: "letter"
+      base_font_pt:
+        description: "Base font size in points (EPUB only)"
+        required: false
+        default: "11"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Calibre (for EPUB) + PyMuPDF
+        run: |
+          sudo -v
+          sudo apt-get update -y
+          sudo apt-get install -y python3-pip
+          pip3 install --quiet pymupdf
+          if [ "${{ inputs.input_type }}" = "epub_url" ]; then
+            curl -L https://download.calibre-ebook.com/linux-installer.py | sudo -E python3 -
+          fi
+
+      - name: Download input
+        run: |
+          mkdir -p work
+          curl -L "${{ inputs.url }}" -o work/input.bin
+          file work/input.bin || true
+
+      - name: Build base.pdf
+        run: |
+          set -e
+          if [ "${{ inputs.input_type }}" = "epub_url" ]; then
+            mv work/input.bin work/book.epub
+            ebook-convert work/book.epub work/base.pdf \
+              --paper-size "${{ inputs.paper_size }}" \
+              --margin-left 54 --margin-top 54 \
+              --margin-right 54 --margin-bottom 54 \
+              --pdf-use-document-metadata \
+              --embed-all-fonts \
+              --pdf-add-toc \
+              --base-font-size "${{ inputs.base_font_pt }}"
+          else
+            mv work/input.bin work/base.pdf
+          fi
+          ls -lh work/base.pdf
+
+      - name: Add journaling gutter + “Home” hotspot (rotate if landscape)
+        env:
+          RIGHT_MARGIN_IN: ${{ inputs.right_margin_in }}
+          ORIENTATION: ${{ inputs.orientation }}
+        run: |
+          python3 - <<'PY'
+import os, fitz
+right = float(os.getenv("RIGHT_MARGIN_IN","3.0"))
+land = os.getenv("ORIENTATION","landscape").lower()=="landscape"
+margin = int(right*72)
+doc = fitz.open("work/base.pdf")
+if land:
+    for p in doc:
+        if p.rect.height > p.rect.width:
+            p.set_rotation(90)
+for p in doc:
+    r = p.rect
+    x = r.x1 - margin
+    # divider line
+    p.draw_line(fitz.Point(x, r.y0+12), fitz.Point(x, r.y1-12), color=(0,0,0), width=0.7)
+    # tiny "Home" + hotspot to first page
+    p.insert_text(fitz.Point(r.x0+18, r.y0+22), "Home", fontsize=8, color=(0.3,0.3,0.3))
+    p.insert_link({"kind": fitz.LINK_GOTO, "from": fitz.Rect(r.x0+12, r.y0+10, r.x0+75, r.y0+28), "page": 0})
+doc.save("work/journaling.pdf")
+print("Saved work/journaling.pdf")
+PY
+          ls -lh work/journaling.pdf
+
+      - name: Upload finished PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: journaling-pdf
+          path: work/journaling.pdf
+          if-no-files-found: error

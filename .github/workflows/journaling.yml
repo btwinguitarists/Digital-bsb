@@ -4,57 +4,34 @@ on:
   workflow_dispatch:
     inputs:
       pdf_path:
-        description: Path to the source PDF in this repo
+        description: 'Path to PDF in this repo (e.g., bsb.pdf)'
         required: true
-        default: "bsb.pdf"
+        default: 'bsb.pdf'
       right_margin_in:
-        description: Right journal margin (inches)
+        description: 'Right journal margin in inches'
         required: true
-        default: "3.0"
+        default: '3.0'
       divider:
-        description: Draw a vertical divider? (yes/no)
+        description: 'Draw divider line? yes/no'
         required: true
-        default: "yes"
+        default: 'yes'
       home_hotspot:
-        description: Add a 'Home' hotspot? (yes/no)
+        description: 'Add Home hotspot? yes/no'
         required: true
-        default: "yes"
+        default: 'yes'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
-      - run: pip install --quiet pymupdf
+          python-version: '3.x'
+
+      - run: pip install pymupdf
+
       - name: Add journaling margin
+        shell: bash
         env:
-          SRC_PDF: ${{ inputs.pdf_path }}
-          RIGHT_IN: ${{ inputs.right_margin_in }}
-          DIVIDER: ${{ inputs.divider }}
-          HOME: ${{ inputs.home_hotspot }}
-        run: |
-          python - <<'PY'
-import os, fitz
-src=os.environ['SRC_PDF']
-right_in=float(os.environ.get('RIGHT_IN','3.0'))
-add_divider=os.environ.get('DIVIDER','yes').lower()=='yes'
-add_home=os.environ.get('HOME','yes').lower()=='yes'
-margin=int(right_in*72)
-doc=fitz.open(src)
-for p in doc:
-    r=p.rect
-    p.set_mediabox(fitz.Rect(r.x0,r.y0,r.x1+margin,r.y1))
-    if add_divider: p.draw_line((r.x1,r.y0+12),(r.x1,r.y1-12),color=(0,0,0),width=0.5)
-    if add_home:
-        p.insert_text((r.x0+18,r.y0+22),"Home",fontsize=8,color=(0.3,0.3,0.3))
-        p.insert_link({"kind":fitz.LINK_GOTO,"from":fitz.Rect(r.x0+12,r.y0+10,r.x0+70,r.y0+28),"page":0})
-doc.save('journaling.pdf')
-print('Wrote journaling.pdf')
-PY
-      - uses: actions/upload-artifact@v4
-        with:
-          name: journaling-pdf
-          path: journaling.pdf

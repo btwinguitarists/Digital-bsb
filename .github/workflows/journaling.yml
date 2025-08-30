@@ -31,25 +31,26 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install Python deps (PyMuPDF)
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y python3-pip
-          pip3 install --quiet pymupdf
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
 
-      - name: Install Calibre (only if EPUB)
+      - name: Install Python deps
+        run: pip install --quiet pymupdf
+
+      - name: Install Calibre (only for EPUB input)
         if: ${{ inputs.input_type == 'epub' }}
         run: |
           curl -L https://download.calibre-ebook.com/linux-installer.py | sudo -E python3 -
 
-      - name: Download input
+      - name: Download input file
         run: |
           mkdir -p work
           curl -L "${{ inputs.url }}" -o work/input.bin
-          file work/input.bin || true
 
       - name: Build base.pdf
         run: |
@@ -74,32 +75,7 @@ jobs:
           RIGHT_MARGIN_IN: ${{ inputs.right_margin_in }}
           ORIENTATION: ${{ inputs.orientation }}
         run: |
-          cat > work/add_journal.py << 'PY'
-import os, fitz
-right = float(os.getenv("RIGHT_MARGIN_IN","3.0"))
-land = os.getenv("ORIENTATION","landscape").lower()=="landscape"
-margin = int(right*72)
-doc = fitz.open("work/base.pdf")
-
-# rotate to landscape if requested (preserves links)
-if land:
-    for p in doc:
-        if p.rect.height > p.rect.width:
-            p.set_rotation(90)
-
-# draw divider and add Home hotspot on each page
-for p in doc:
-    r = p.rect
-    x = r.x1 - margin
-    p.draw_line(fitz.Point(x, r.y0+12), fitz.Point(x, r.y1-12), color=(0,0,0), width=0.7)
-    p.insert_text(fitz.Point(r.x0+18, r.y0+22), "Home", fontsize=8, color=(0.3,0.3,0.3))
-    p.insert_link({"kind": fitz.LINK_GOTO, "from": fitz.Rect(r.x0+12, r.y0+10, r.x0+75, r.y0+28), "page": 0})
-
-doc.save("work/journaling.pdf")
-print("Saved work/journaling.pdf")
-PY
-          python3 work/add_journal.py
-          ls -lh work/journaling.pdf
+          python3 scripts/add_journal.py
 
       - name: Upload finished PDF
         uses: actions/upload-artifact@v4

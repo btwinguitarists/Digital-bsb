@@ -1,47 +1,54 @@
-name: Add Journaling Gutter (keep links)
+name: EPUB/PDF → Journaling PDF (keep links)
 
 on:
   workflow_dispatch:
     inputs:
       pdf_path:
-        description: "Path to the input PDF in this repo (e.g., source.pdf or input/source.pdf)"
+        description: "Path to source PDF in the repo"
         required: true
-        default: source.pdf
+        default: "bsb-journaling.pdf"
       right_margin_in:
-        description: "Right journal margin (inches)"
+        description: "Right journaling margin (inches)"
         required: true
-        default: "3"
+        default: "3.0"
       orientation:
-        description: "portrait or landscape (landscape rotates pages; margin becomes right side visually)"
+        description: "portrait or landscape"
         required: true
-        default: portrait
+        default: "portrait"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.x"
 
-      - name: Install PyMuPDF
+      - name: Install deps
         run: pip install --quiet pymupdf
 
-      - name: Add journaling gutter + hotspots (links preserved)
-        env:
-          PDF_PATH: ${{ inputs.pdf_path }}
-          RIGHT_MARGIN_IN: ${{ inputs.right_margin_in }}
-          ORIENTATION: ${{ inputs.orientation }}
-        run: python add_journal.py
+      - name: Prepare input PDF
+        run: |
+          mkdir -p work
+          cp "${{ inputs.pdf_path }}" work/source.pdf
+          ls -lh work/source.pdf
+
+      - name: Add journaling gutter + keep links
+        run: |
+          python3 scripts/add_journal.py \
+            --in work/source.pdf \
+            --out work/journaling.pdf \
+            --right-in "${{ inputs.right_margin_in }}" \
+            --orientation "${{ inputs.orientation }}"
+          ls -lh work/journaling.pdf
 
       - name: Upload finished PDF
         uses: actions/upload-artifact@v4
         with:
           name: journaling-pdf
-          path: output/journaling.pdf
+          path: work/journaling.pdf
           if-no-files-found: error
- 

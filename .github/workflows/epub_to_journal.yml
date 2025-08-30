@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       epub_path:
-        description: "Path to EPUB in repo (e.g., 'bsb 2.epub')"
+        description: "Path to EPUB in repo (example: bsb 2.epub)"
         required: true
         default: "bsb 2.epub"
       right_margin_in:
@@ -23,17 +23,16 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      RIGHT_MARGIN_IN: ${{ inputs.right_margin_in }}
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install Calibre (ebook-convert)
+      # Fixes the libEGL.so.1 error and installs ebook-convert
+      - name: Install Calibre and EGL/OpenGL libs
         run: |
-          sudo -v
-          curl -L https://download.calibre-ebook.com/linux-installer.py | sudo -E python3 -
+          sudo apt-get update
+          sudo apt-get install -y calibre libegl1 libopengl0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -43,30 +42,78 @@ jobs:
       - name: Install Python deps
         run: pip install --quiet pymupdf
 
-      - name: Copy & validate EPUB
+      - name: Prepare & validate EPUB
+        id: prep
         shell: bash
         run: |
+          set -e
           mkdir -p work
-          cp "${{ inputs.epub_path }}" "work/book.epub"
-          python3 scripts/validate_epub.py "work/book.epub"
+          EPUB_PATH="${{ inputs.epub_path }}"
+          cp "$EPUB_PATH" work/book.epub
+
+          # Validate EPUB is a real ZIP
+          python - <<'PY'
+import sys, zipfile
+try:
+    z = zipfile.ZipFile('work/book.epub')
+    bad = z.testzip()
+    if bad:
+        print("Corrupt entry:", bad); sys.exit(1)
+    print("EPUB OK")
+except Exception as e:
+    print("Not a valid EPUB/ZIP:", e); sys.exit(1)
+PY
+
+          # Compute right margin in points (72 pt/in)
+          RIGHT_PT=$(python - <<'PY'
+import sys
+print(int(float(sys.argv[1])*72))
+PY
+          "${{ inputs.right_margin_in }}")
+          echo "right_pt=$RIGHT_PT" >> "$GITHUB_OUTPUT"
 
       - name: Convert EPUB to PDF (preserve links/TOC)
         shell: bash
         run: |
-          ebook-convert "work/book.epub" "work/base.pdf" \
+          ebook-convert work/book.epub work/base.pdf \
             --paper-size "${{ inputs.paper_size }}" \
-            --margin-left 54 --margin-right 54 --margin-top 54 --margin-bottom 54 \
-            --pdf-use-document-metadata --embed-all-fonts --pdf-add-toc \
+            --margin-left 54 \
+            --margin-top 54 \
+            --margin-right ${{ steps.prep.outputs.right_pt }} \
+            --margin-bottom 54 \
+            --pdf-use-document-metadata \
+            --embed-all-fonts \
+            --pdf-add-toc \
             --base-font-size "${{ inputs.base_font_pt }}"
           ls -lh work/base.pdf
 
-      - name: Add journaling gutter (keep links)
+      - name: Add divider + Home hotspot (links stay live)
         shell: bash
+        env:
+          RIGHT_PT: ${{ steps.prep.outputs.right_pt }}
         run: |
-          python3 scripts/add_journal.py \
-            --in_pdf work/base.pdf \
-            --out_pdf work/journaling.pdf \
-            --right_in "${{ inputs.right_margin_in }}"
+          python - <<'PY'
+import os, fitz
+in_pdf = "work/base.pdf"
+out_pdf = "work/journaling.pdf"
+right_pt = int(os.environ["RIGHT_PT"])
+
+doc = fitz.open(in_pdf)
+for p in doc:
+    r = p.rect
+    x = r.x1 - right_pt
+    # Divider line near the journaling gutter
+    p.draw_line(fitz.Point(x, r.y0+12), fitz.Point(x, r.y1-12), width=0.5, color=(0,0,0))
+    # "Home" label + hotspot back to page 1 (index 0)
+    p.insert_text(fitz.Point(r.x0+18, r.y0+22), "Home", fontsize=8, color=(0.3,0.3,0.3))
+    p.insert_link({
+        "kind": fitz.LINK_GOTO,
+        "from": fitz.Rect(r.x0+12, r.y0+10, r.x0+75, r.y0+28),
+        "page": 0
+    })
+doc.save(out_pdf)
+print("Wrote", out_pdf)
+PY
           ls -lh work/journaling.pdf
 
       - name: Upload finished PDF

@@ -48,15 +48,7 @@ jobs:
         run: |
           mkdir -p work
           cp "${{ inputs.epub_path }}" "work/book.epub"
-          python3 - <<'PY'
-import sys, zipfile
-p = "work/book.epub"
-try:
-    zipfile.ZipFile(p).testzip()
-    print("EPUB OK:", p)
-except Exception as e:
-    print("ERROR:", e); sys.exit(1)
-PY
+          python3 scripts/validate_epub.py "work/book.epub"
 
       - name: Convert EPUB to PDF (preserve links/TOC)
         shell: bash
@@ -71,22 +63,10 @@ PY
       - name: Add journaling gutter (keep links)
         shell: bash
         run: |
-          python3 - <<'PY'
-import os, fitz
-in_pdf = "work/base.pdf"
-out_pdf = "work/journaling.pdf"
-right_in = float(os.getenv("RIGHT_MARGIN_IN","3.0"))
-margin = int(right_in * 72)
-doc = fitz.open(in_pdf)
-for p in doc:
-    r = p.rect
-    x = r.x1 - margin
-    p.draw_line(fitz.Point(x, r.y0+12), fitz.Point(x, r.y1-12), color=(0,0,0), width=0.5)
-    p.insert_text(fitz.Point(r.x0+18, r.y0+22), "Home", fontsize=8, color=(0.3,0.3,0.3))
-    p.insert_link({"kind": fitz.LINK_GOTO, "from": fitz.Rect(r.x0+12, r.y0+10, r.x0+75, r.y0+28), "page": 0})
-doc.save(out_pdf)
-print("Wrote", out_pdf)
-PY
+          python3 scripts/add_journal.py \
+            --in_pdf work/base.pdf \
+            --out_pdf work/journaling.pdf \
+            --right_in "${{ inputs.right_margin_in }}"
           ls -lh work/journaling.pdf
 
       - name: Upload finished PDF

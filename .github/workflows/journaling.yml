@@ -1,22 +1,22 @@
-name: EPUB/PDF → Journaling PDF (keep all links)
+name: epub_to_journaling_pdf
 
 on:
   workflow_dispatch:
     inputs:
       pdf_path:
-        description: "Path to the source PDF in this repo (e.g., bsb.pdf or input/bsb.pdf)"
+        description: Path to the source PDF in this repo
         required: true
         default: "bsb.pdf"
       right_margin_in:
-        description: "Right journal margin (inches)"
+        description: Right journal margin (inches)
         required: true
         default: "3.0"
       divider:
-        description: "Draw a vertical divider line? (yes/no)"
+        description: Draw a vertical divider? (yes/no)
         required: true
         default: "yes"
       home_hotspot:
-        description: "Add a 'Home' hotspot (top-left) linking to page 1? (yes/no)"
+        description: Add a 'Home' hotspot? (yes/no)
         required: true
         default: "yes"
 
@@ -24,75 +24,37 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-
-      - name: Install deps
-        run: pip install --quiet pymupdf
-
-      - name: Make journaling PDF
+      - run: pip install --quiet pymupdf
+      - name: Add journaling margin
         env:
           SRC_PDF: ${{ inputs.pdf_path }}
           RIGHT_IN: ${{ inputs.right_margin_in }}
-          DRAW_DIVIDER: ${{ inputs.divider }}
-          ADD_HOME: ${{ inputs.home_hotspot }}
+          DIVIDER: ${{ inputs.divider }}
+          HOME: ${{ inputs.home_hotspot }}
         run: |
-          python - << 'PY'
-          import os, sys, fitz
-
-          src = os.environ["SRC_PDF"]
-          right_in = float(os.environ.get("RIGHT_IN","3.0"))
-          draw_divider = os.environ.get("DRAW_DIVIDER","yes").lower() == "yes"
-          add_home = os.environ.get("ADD_HOME","yes").lower() == "yes"
-
-          right_pt = int(round(right_in * 72))  # inches → points
-          out_dir = "out"
-          os.makedirs(out_dir, exist_ok=True)
-          out = os.path.join(out_dir, "journaling.pdf")
-
-          doc = fitz.open(src)
-
-          # 1) Enlarge each page canvas by adding width on the right
-          #    (keeps all content & links exactly where they are)
-          for i in range(len(doc)):
-            page = doc[i]
-            rect = page.rect
-            new_rect = fitz.Rect(0, 0, rect.width + right_pt, rect.height)
-            page.set_media_box(new_rect)
-            page.set_cropbox(new_rect)
-
-          # 2) Draw divider + optional "Home" hotspot to page 1 (index 0)
-          for i in range(len(doc)):
-            page = doc[i]
-            r = page.rect
-            x = r.x1 - right_pt
-
-            if draw_divider:
-              # Subtle line inside margins a bit
-              page.draw_line(fitz.Point(x, r.y0 + 12), fitz.Point(x, r.y1 - 12), color=(0,0,0), width=0.6)
-
-            if add_home:
-              # Small "Home" label
-              page.insert_text(fitz.Point(r.x0 + 18, r.y0 + 22), "Home", fontsize=8, color=(0.3,0.3,0.3))
-              # Clickable rect back to page 1
-              page.insert_link({
-                "kind": fitz.LINK_GOTO,
-                "from": fitz.Rect(r.x0 + 12, r.y0 + 10, r.x0 + 70, r.y0 + 28),
-                "page": 0
-              })
-
-          doc.save(out)
-          print("Wrote", out)
-          PY
-
-      - name: Upload finished PDF
-        uses: actions/upload-artifact@v4
+          python - <<'PY'
+import os, fitz
+src=os.environ['SRC_PDF']
+right_in=float(os.environ.get('RIGHT_IN','3.0'))
+add_divider=os.environ.get('DIVIDER','yes').lower()=='yes'
+add_home=os.environ.get('HOME','yes').lower()=='yes'
+margin=int(right_in*72)
+doc=fitz.open(src)
+for p in doc:
+    r=p.rect
+    p.set_mediabox(fitz.Rect(r.x0,r.y0,r.x1+margin,r.y1))
+    if add_divider: p.draw_line((r.x1,r.y0+12),(r.x1,r.y1-12),color=(0,0,0),width=0.5)
+    if add_home:
+        p.insert_text((r.x0+18,r.y0+22),"Home",fontsize=8,color=(0.3,0.3,0.3))
+        p.insert_link({"kind":fitz.LINK_GOTO,"from":fitz.Rect(r.x0+12,r.y0+10,r.x0+70,r.y0+28),"page":0})
+doc.save('journaling.pdf')
+print('Wrote journaling.pdf')
+PY
+      - uses: actions/upload-artifact@v4
         with:
           name: journaling-pdf
-          path: out/journaling.pdf
-          if-no-files-found: error
+          path: journaling.pdf

@@ -1,20 +1,24 @@
-name: EPUB/PDF → Journaling PDF (keep links)
+name: EPUB → Journaling PDF (keep links)
 
 on:
   workflow_dispatch:
     inputs:
-      pdf_path:
-        description: "Path to source PDF in the repo"
+      epub_path:
+        description: "Path to EPUB in repo (e.g., 'bsb 2.epub' or 'bsb.epub')"
         required: true
-        default: "bsb-journaling.pdf"
+        default: "bsb 2.epub"
       right_margin_in:
         description: "Right journaling margin (inches)"
         required: true
         default: "3.0"
-      orientation:
-        description: "portrait or landscape"
+      paper_size:
+        description: "letter or a4"
         required: true
-        default: "portrait"
+        default: "letter"
+      base_font_pt:
+        description: "Base font size (pt)"
+        required: true
+        default: "11"
 
 jobs:
   build:
@@ -23,27 +27,48 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Install Calibre (ebook-convert)
+        run: |
+          sudo -v
+          curl -L https://download.calibre-ebook.com/linux-installer.py | sudo -E python3 -
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
-      - name: Install deps
+      - name: Python deps
         run: pip install --quiet pymupdf
 
-      - name: Prepare input PDF
+      - name: Copy & validate EPUB
         run: |
           mkdir -p work
-          cp "${{ inputs.pdf_path }}" work/source.pdf
-          ls -lh work/source.pdf
+          cp "${{ inputs.epub_path }}" "work/book.epub"
+          python3 - <<'PY'
+import sys, zipfile
+p = "work/book.epub"
+try:
+    zipfile.ZipFile(p).testzip()
+    print("EPUB OK:", p)
+except Exception as e:
+    print("ERROR:", e); sys.exit(1)
+PY
 
-      - name: Add journaling gutter + keep links
+      - name: Convert EPUB → PDF (preserve links/TOC)
+        run: |
+          ebook-convert "work/book.epub" "work/base.pdf" \
+            --paper-size "${{ inputs.paper_size }}" \
+            --margin-left 54 --margin-right 54 --margin-top 54 --margin-bottom 54 \
+            --pdf-use-document-metadata --embed-all-fonts --pdf-add-toc \
+            --base-font-size "${{ inputs.base_font_pt }}"
+          ls -lh work/base.pdf
+
+      - name: Add journaling gutter (expand page; keep links)
         run: |
           python3 scripts/add_journal.py \
-            --in work/source.pdf \
-            --out work/journaling.pdf \
-            --right-in "${{ inputs.right_margin_in }}" \
-            --orientation "${{ inputs.orientation }}"
+            --in "work/base.pdf" \
+            --out "work/journaling.pdf" \
+            --right-in "${{ inputs.right_margin_in }}"
           ls -lh work/journaling.pdf
 
       - name: Upload finished PDF

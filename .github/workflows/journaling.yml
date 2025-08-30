@@ -1,16 +1,12 @@
-name: EPUB/PDF → Journaling PDF (keep all links)
+name: EPUB or PDF to Journaling PDF (keep links)
 
 on:
   workflow_dispatch:
     inputs:
       input_type:
-        description: "Pick epub_url or pdf_url"
+        description: "epub or pdf"
         required: true
-        default: epub_url
-        type: choice
-        options:
-          - epub_url
-          - pdf_url
+        default: "epub"
       url:
         description: "Direct URL to an EPUB or a PDF"
         required: true
@@ -19,7 +15,7 @@ on:
         required: true
         default: "3.0"
       orientation:
-        description: "portrait or landscape (landscape = rotate pages so margin becomes right)"
+        description: "portrait or landscape (landscape rotates pages so margin appears at right)"
         required: true
         default: "landscape"
       paper_size:
@@ -38,15 +34,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Calibre (for EPUB) + PyMuPDF
+      - name: Install Python deps (PyMuPDF)
         run: |
-          sudo -v
           sudo apt-get update -y
           sudo apt-get install -y python3-pip
           pip3 install --quiet pymupdf
-          if [ "${{ inputs.input_type }}" = "epub_url" ]; then
-            curl -L https://download.calibre-ebook.com/linux-installer.py | sudo -E python3 -
-          fi
+
+      - name: Install Calibre (only if EPUB)
+        if: ${{ inputs.input_type == 'epub' }}
+        run: |
+          curl -L https://download.calibre-ebook.com/linux-installer.py | sudo -E python3 -
 
       - name: Download input
         run: |
@@ -57,7 +54,7 @@ jobs:
       - name: Build base.pdf
         run: |
           set -e
-          if [ "${{ inputs.input_type }}" = "epub_url" ]; then
+          if [ "${{ inputs.input_type }}" = "epub" ]; then
             mv work/input.bin work/book.epub
             ebook-convert work/book.epub work/base.pdf \
               --paper-size "${{ inputs.paper_size }}" \
@@ -72,32 +69,36 @@ jobs:
           fi
           ls -lh work/base.pdf
 
-      - name: Add journaling gutter + “Home” hotspot (rotate if landscape)
+      - name: Add journaling gutter and Home hotspot
         env:
           RIGHT_MARGIN_IN: ${{ inputs.right_margin_in }}
           ORIENTATION: ${{ inputs.orientation }}
         run: |
-          python3 - <<'PY'
+          cat > work/add_journal.py << 'PY'
 import os, fitz
 right = float(os.getenv("RIGHT_MARGIN_IN","3.0"))
 land = os.getenv("ORIENTATION","landscape").lower()=="landscape"
 margin = int(right*72)
 doc = fitz.open("work/base.pdf")
+
+# rotate to landscape if requested (preserves links)
 if land:
     for p in doc:
         if p.rect.height > p.rect.width:
             p.set_rotation(90)
+
+# draw divider and add Home hotspot on each page
 for p in doc:
     r = p.rect
     x = r.x1 - margin
-    # divider line
     p.draw_line(fitz.Point(x, r.y0+12), fitz.Point(x, r.y1-12), color=(0,0,0), width=0.7)
-    # tiny "Home" + hotspot to first page
     p.insert_text(fitz.Point(r.x0+18, r.y0+22), "Home", fontsize=8, color=(0.3,0.3,0.3))
     p.insert_link({"kind": fitz.LINK_GOTO, "from": fitz.Rect(r.x0+12, r.y0+10, r.x0+75, r.y0+28), "page": 0})
+
 doc.save("work/journaling.pdf")
 print("Saved work/journaling.pdf")
 PY
+          python3 work/add_journal.py
           ls -lh work/journaling.pdf
 
       - name: Upload finished PDF

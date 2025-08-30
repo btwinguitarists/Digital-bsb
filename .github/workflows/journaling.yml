@@ -1,85 +1,89 @@
-name: EPUB or PDF to Journaling PDF (keep links)
+name: PDF → Journaling PDF (keep links)
 
 on:
   workflow_dispatch:
     inputs:
-      input_type:
-        description: "epub or pdf"
+      pdf_path:
+        description: "Path to your input PDF in the repo (e.g., input/source.pdf)"
         required: true
-        default: "epub"
-      url:
-        description: "Direct URL to an EPUB or a PDF"
-        required: true
+        default: "input/source.pdf"
       right_margin_in:
         description: "Right journal margin (inches)"
         required: true
-        default: "3.0"
+        default: "3"
       orientation:
-        description: "portrait or landscape (landscape rotates pages so margin appears at right)"
+        description: "portrait or landscape (landscape rotates pages, margin becomes right side visually)"
         required: true
-        default: "landscape"
-      paper_size:
-        description: "letter or a4 (EPUB only)"
-        required: true
-        default: "letter"
-      base_font_pt:
-        description: "Base font size in points (EPUB only)"
-        required: false
-        default: "11"
+        default: "portrait"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verify input PDF exists
+        run: |
+          test -f "${{ inputs.pdf_path }}" || { echo "ERROR: Missing PDF at ${{ inputs.pdf_path }}"; exit 1; }
+          ls -lh "${{ inputs.pdf_path }}"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.11"
 
-      - name: Install Python deps
+      - name: Install deps
         run: pip install --quiet pymupdf
 
-      - name: Install Calibre (only for EPUB input)
-        if: ${{ inputs.input_type == 'epub' }}
-        run: |
-          curl -L https://download.calibre-ebook.com/linux-installer.py | sudo -E python3 -
-
-      - name: Download input file
-        run: |
-          mkdir -p work
-          curl -L "${{ inputs.url }}" -o work/input.bin
-
-      - name: Build base.pdf
-        run: |
-          set -e
-          if [ "${{ inputs.input_type }}" = "epub" ]; then
-            mv work/input.bin work/book.epub
-            ebook-convert work/book.epub work/base.pdf \
-              --paper-size "${{ inputs.paper_size }}" \
-              --margin-left 54 --margin-top 54 \
-              --margin-right 54 --margin-bottom 54 \
-              --pdf-use-document-metadata \
-              --embed-all-fonts \
-              --pdf-add-toc \
-              --base-font-size "${{ inputs.base_font_pt }}"
-          else
-            mv work/input.bin work/base.pdf
-          fi
-          ls -lh work/base.pdf
-
-      - name: Add journaling gutter and Home hotspot
+      - name: Add journaling gutter + corner hotspots (links preserved)
         env:
+          IN_PDF: ${{ inputs.pdf_path }}
           RIGHT_MARGIN_IN: ${{ inputs.right_margin_in }}
           ORIENTATION: ${{ inputs.orientation }}
         run: |
-          python3 scripts/add_journal.py
+          mkdir -p output
+          python - <<'PY'
+          import os, fitz
+          in_pdf   = os.environ.get("IN_PDF", "input/source.pdf")
+          out_pdf  = "output/journaling.pdf"
+          right_in = float(os.environ.get("RIGHT_MARGIN_IN", "3"))
+          orient   = os.environ.get("ORIENTATION", "portrait").lower()
+          margin   = int(right_in * 72)
+          rotate   = (orient == "landscape")
+
+          doc = fitz.open(in_pdf)
+
+          for p in doc:
+              # rotate portrait pages if landscape requested (preserves links)
+              if rotate and p.rect.height > p.rect.width:
+                  p.set_rotation(90)
+
+              r = p.rect  # refresh after any rotation
+              x = r.x1 - margin
+
+              # vertical divider line
+              p.draw_line(fitz.Point(x, r.y0+12), fitz.Point(x, r.y1-12), width=0.6)
+
+              # "Home" top-left -> page 1 (index 0)
+              p.insert_text(fitz.Point(r.x0+18, r.y0+18), "Home", fontsize=8, color=(0,0,0))
+              p.insert_link({"kind": fitz.LINK_GOTO,
+                             "from": fitz.Rect(r.x0+12, r.y0+10, r.x0+70, r.y0+26),
+                             "page": 0})
+
+              # "Chapters" top-right -> page 1 as well (change target if your TOC is elsewhere)
+              p.insert_text(fitz.Point(r.x1-80, r.y0+18), "Chapters", fontsize=8, color=(0,0,0))
+              p.insert_link({"kind": fitz.LINK_GOTO,
+                             "from": fitz.Rect(r.x1-84, r.y0+10, r.x1-12, r.y0+26),
+                             "page": 0})
+
+          doc.save(out_pdf)
+          print("Saved", out_pdf)
+          PY
 
       - name: Upload finished PDF
         uses: actions/upload-artifact@v4
         with:
           name: journaling-pdf
-          path: work/journaling.pdf
+          path: output/journaling.pdf
           if-no-files-found: error

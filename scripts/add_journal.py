@@ -1,78 +1,51 @@
-import os, sys, fitz  # PyMuPDF
+#!/usr/bin/env python3
+import argparse, os
+import fitz  # PyMuPDF
 
-IN_PATH  = os.getenv("PDF_PATH", "source.pdf")
-OUT_DIR  = "output"
-OUT_PATH = os.path.join(OUT_DIR, "journaling.pdf")
+def main():
+    ap = argparse.ArgumentParser(description="Add right-side journaling gutter and keep links.")
+    ap.add_argument("--in",  dest="in_pdf",  required=True, help="Input PDF")
+    ap.add_argument("--out", dest="out_pdf", required=True, help="Output PDF")
+    ap.add_argument("--right-in", dest="right_in", default="3.0", help="Right margin (inches)")
+    ap.add_argument("--orientation", dest="orientation", choices=["portrait","landscape"], default="portrait")
+    args = ap.parse_args()
 
-RIGHT_IN = float(os.getenv("RIGHT_MARGIN_IN", "3"))
-ORIENT   = os.getenv("ORIENTATION", "portrait").lower()
+    right_in = float(args.right_in)
+    margin_pt = int(round(right_in * 72))  # 72 pt/in
 
-# If you want the "Chapters" corner link to jump to a different page,
-# set CHAPTERS_PAGE to a 0-based index via repo secret or edit here.
-CHAPTERS_PAGE = int(os.getenv("CHAPTERS_PAGE", "0"))
+    doc = fitz.open(args.in_pdf)
 
-def fail(msg):
-    print("ERROR:", msg)
-    sys.exit(1)
+    # If you want the writing space to be the "right side" in landscape, rotate pages first:
+    if args.orientation == "landscape":
+        for page in doc:
+            # Only rotate if page is portrait-ish to keep already-landscape pages intact
+            if page.rect.height > page.rect.width:
+                page.set_rotation(90)
 
-if not os.path.exists(IN_PATH):
-    fail(f"Input PDF not found: {IN_PATH}")
+    # Draw divider and add a "Home" hotspot (back to page 1)
+    for page in doc:
+        r = page.rect
+        x = r.x1 - margin_pt
 
-os.makedirs(OUT_DIR, exist_ok=True)
+        # Vertical divider line (slim)
+        page.draw_line(fitz.Point(x, r.y0 + 12), fitz.Point(x, r.y1 - 12), color=(0, 0, 0), width=0.5)
 
-margin = int(RIGHT_IN * 72)         # inches → points
-rotate_landscape = (ORIENT == "landscape")
+        # "Home" label + link back to page 1 (index 0)
+        page.insert_text(
+            fitz.Point(r.x0 + 18, r.y0 + 22),
+            "Home",
+            fontsize=8,
+            color=(0.3, 0.3, 0.3),
+        )
+        page.insert_link({
+            "kind": fitz.LINK_GOTO,
+            "from": fitz.Rect(r.x0 + 12, r.y0 + 10, r.x0 + 75, r.y0 + 28),
+            "page": 0
+        })
 
-try:
-    doc = fitz.open(IN_PATH)
-except Exception as e:
-    fail(f"Could not open PDF: {e}")
+    os.makedirs(os.path.dirname(args.out_pdf), exist_ok=True)
+    doc.save(args.out_pdf)
+    print("Saved:", args.out_pdf)
 
-# Basic sanity log
-print(f"Opened: {IN_PATH} ({doc.page_count} pages)")
-print(f"Right margin (in): {RIGHT_IN}  →  {margin} pt")
-print(f"Orientation: {ORIENT}  (rotate portrait pages? {rotate_landscape})")
-
-for p in doc:
-    # Rotate portrait pages if landscape requested (preserves links)
-    if rotate_landscape and p.rect.height > p.rect.width:
-        p.set_rotation(90)
-
-    r = p.rect  # refresh after rotation
-    x = r.x1 - margin
-
-    # Vertical divider line in the margin area
-    p.draw_line(fitz.Point(x, r.y0 + 12), fitz.Point(x, r.y1 - 12), width=0.6)
-
-    # Corner “Home” (top-left) → page 1 (index 0)
-    p.insert_text(
-        fitz.Point(r.x0 + 18, r.y0 + 18),
-        "Home",
-        fontsize=8,
-        color=(0, 0, 0),
-    )
-    p.insert_link({
-        "kind": fitz.LINK_GOTO,
-        "from": fitz.Rect(r.x0 + 12, r.y0 + 10, r.x0 + 70, r.y0 + 26),
-        "page": 0
-    })
-
-    # Corner “Chapters” (top-right) → CHAPTERS_PAGE (default 0)
-    p.insert_text(
-        fitz.Point(r.x1 - 80, r.y0 + 18),
-        "Chapters",
-        fontsize=8,
-        color=(0, 0, 0),
-    )
-    p.insert_link({
-        "kind": fitz.LINK_GOTO,
-        "from": fitz.Rect(r.x1 - 84, r.y0 + 10, r.x1 - 12, r.y0 + 26),
-        "page": CHAPTERS_PAGE
-    })
-
-try:
-    doc.save(OUT_PATH)
-except Exception as e:
-    fail(f"Could not save output PDF: {e}")
-
-print("Saved:", OUT_PATH)
+if __name__ == "__main__":
+    main()
